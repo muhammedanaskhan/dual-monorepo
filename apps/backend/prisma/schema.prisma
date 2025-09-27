@@ -1,15 +1,99 @@
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "mongodb"
-  url      = env("DATABASE_URL")
+  url      = env("DATABASE_URL") // e.g., mongodb+srv://user:pass@cluster/dbname
 }
 
 model User {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  email     String   @unique
-  name      String?
+  handle    String   @unique
   createdAt DateTime @default(now())
+
+  // denormalized stats for speed
+  wins   Int     @default(0)
+  losses Int     @default(0)
+  streak Int     @default(0)
+  elo    Int     @default(1200)
+
+  @@index([elo(sort: Desc)])
+}
+
+model Room {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  inviteCode  String   
+  hostUserId  String   @db.ObjectId
+  state       RoomState @default(waiting)
+  bestOf      Int      @default(3)
+  createdAt   DateTime @default(now())
+  startedAt   DateTime?
+  endedAt     DateTime?
+
+  @@index([state])
+  @@unique([inviteCode])
+}
+
+enum RoomState {
+  waiting
+  ready
+  active
+  finished
+  abandoned
+}
+
+model RoomPlayer {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  roomId   String   @db.ObjectId
+  userId   String   @db.ObjectId
+  slot     Int      // 1 or 2
+  isReady  Boolean  @default(false)
+  joinedAt DateTime @default(now())
+
+  @@index([roomId])
+  @@index([roomId, slot], map: "unique_room_slot")
+}
+
+model Battle {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  roomId        String   @db.ObjectId @unique
+  p1UserId      String   @db.ObjectId
+  p2UserId      String   @db.ObjectId
+  p1Score       Int      @default(0)
+  p2Score       Int      @default(0)
+  winnerUserId  String?  @db.ObjectId
+  status        BattleStatus @default(pending)
+  createdAt     DateTime @default(now())
+
+  @@index([status])
+}
+
+enum BattleStatus {
+  pending
+  running
+  done
+}
+
+model Round {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  battleId     String   @db.ObjectId
+  roundNo      Int
+  winnerUserId String   @db.ObjectId
+  p1Outcome    Json
+  p2Outcome    Json
+  startedAt    DateTime @default(now())
+  endedAt      DateTime @default(now())
+
+  @@unique([battleId, roundNo], map: "battle_round")
+}
+
+model EventLog {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  roomId   String?  @db.ObjectId
+  type     String
+  payload  Json
+  ts       DateTime @default(now())
+  @@index([roomId])
 }
