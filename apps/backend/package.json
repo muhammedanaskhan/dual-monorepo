@@ -19,11 +19,10 @@
     "jsonwebtoken": "^9.0.2",
     "prisma": "^6.16.2",
     "socket.io": "^4.8.1",
-    "zod": "^4.1.11"
-    "dev": "ts-node-dev --respawn --transpileOnly src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "prisma": "prisma generate"
+    "zod": "^4.1.11",
+    "dev": "pnpm run build && pnpm run start",
+    "start": "node dist/src/index.js",
+    "build": "tsc -p ."
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
