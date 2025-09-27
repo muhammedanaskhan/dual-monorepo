@@ -1,7 +1,7 @@
-import express from express;
-import cors from cors;
-import dotenv from dotenv;
-import { PrismaClient } from @prisma/client;
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
 
@@ -11,11 +11,12 @@ app.use(express.json());
 
 const prisma = new PrismaClient();
 
-app.get(/health, (_req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get(/users, async (_req, res) => {
+app.get('/users', async (_req, res) => {
+
   const users = await prisma.user.findMany();
   res.json(users);
 });
