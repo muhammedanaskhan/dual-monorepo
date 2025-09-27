@@ -33,12 +33,13 @@ io.on('connection', (socket) => {
 app.post('/v1/auth/anonymous', async (_req, res) => {
   const user = await requireAuth(_req.headers.authorization);
 
-  if (!user.id) {
+  const existing = await prisma.user.findUnique({ where: { privyId: user.id } })
+  if (!existing) {
     await prisma.user.create({ data: { privyId: user.id } })
-    res.json({msg: "User created"})
+    res.json({ msg: "User created" })
     return
   }
-  res.json({msg: "User already exists"})
+  res.json({ msg: "User already exists" })
 })
 
 
