@@ -21,11 +21,20 @@ function ceilHalf(n: number) { return Math.ceil(n / 2) }
 
 /** --- websockets --- */
 io.on('connection', (socket) => {
+  console.log('User connected:', socket.id)
+  
   socket.on('room.join', ({ roomId }) => {
     socket.join(roomChannel(roomId))
+    console.log(`User ${socket.id} joined room ${roomId}`)
   })
+  
   socket.on('disconnect', () => {
-//todo: we need to handle the case when inside a match - someone just closes the connection
+    console.log('User disconnected:', socket.id)
+    // TODO: Handle disconnection during matches
+  })
+  
+  socket.on('error', (error) => {
+    console.error('Socket error:', error)
   })
 })
 
@@ -33,7 +42,10 @@ io.on('connection', (socket) => {
 app.post('/v1/auth/anonymous', async (_req, res) => {
   const user = await requireAuth(_req.headers.authorization);
 
+  console.log('user', user)
+
   const existing = await prisma.user.findUnique({ where: { privyId: user.id } })
+  console.log('existing', existing)
   if (!existing) {
     await prisma.user.create({ data: { privyId: user.id } })
     res.json({ msg: "User created" })
@@ -50,6 +62,7 @@ app.post('/v1/auth/cards', async (req, res) => {
   if (cards?.cardIds.length === 0) {
     //todo: select any random 5 cards from the 20 cards which we have [zaid].
     const cards = await prisma.card.findMany({ take: 5 })
+    await prisma.user.update({ where: { privyId: user.id }, data: { cardIds: cards.map(card => card.id) } })
     res.json(cards)
     return
   }
@@ -63,19 +76,47 @@ app.post('/v1/auth/cards', async (req, res) => {
   res.json(cardsArray)
 })
 
+app.get('/v1/rooms', async (req, res) => {
+  const rooms = await prisma.room.findMany({})
+  res.json(rooms)
+})
+
 /** --- create room --- */
-//todo: this should handle the logic to find the rooms, and then it should automatically find the room and get the user over there
-app.post('/v1/rooms', async (req, res) => {
+
+app.post('/v1/find-room', async (req, res) => {
   try {
-
-
-    // todo: 
-
-    // 1. Check if this is 
     const user = await requireAuth(req.headers.authorization)
-//todo: lets change it to be unlimited and it should be determined by the engine, that - how many rounds should be played - it should never determine this actually.
+    const rooms = await prisma.room.findMany({})
 
-    const room = await prisma.room.create({
+    // 1) Try to join any waiting room with <2 players
+    for (const r of rooms) {
+      if (r.state !== 'waiting') continue
+
+      const count = await prisma.roomPlayer.count({ where: { roomId: r.id } })
+      if (count >= 2) continue
+
+      // choose slot based on what's taken
+      const players = await prisma.roomPlayer.findMany({ where: { roomId: r.id } })
+      const slot = players.find((p: { slot: number }) => p.slot === 1) ? 2 : 1
+
+      await prisma.roomPlayer.create({
+        data: { roomId: r.id, userId: user.id, slot }
+      })
+
+      await prisma.room.update({ where: { id: r.id }, data: { state: 'ready' } })
+
+      io.to(roomChannel(r.id)).emit('room.joined', { roomId: r.id, userId: user.id, slot })
+      io.to(roomChannel(r.id)).emit('room.ready', { roomId: r.id })
+
+      return res.status(201).json({
+        roomId: r.id,
+        inviteCode: r.inviteCode,
+        msg: 'ROOM_JOINED'
+      })
+    }
+
+    // 2) Otherwise create a fresh waiting room for this user
+    const created = await prisma.room.create({
       data: {
         inviteCode: shortCode(6),
         hostUserId: user.id,
@@ -84,45 +125,25 @@ app.post('/v1/rooms', async (req, res) => {
     })
 
     await prisma.roomPlayer.create({
-      data: { roomId: room.id, userId: user.id, slot: 1, isReady: false },
+      data: { roomId: created.id, userId: user.id, slot: 1 },
     })
 
-    io.to(roomChannel(room.id)).emit('room.created', { roomId: room.id, inviteCode: room.inviteCode }) 
-    res.status(201).json({ roomId: room.id, inviteCode: room.inviteCode, bestOf: room.bestOf })
+    await prisma.room.update({ where: { id: created.id }, data: { state: 'ready' } })
+
+    io.to(roomChannel(created.id)).emit('room.created', { roomId: created.id, inviteCode: created.inviteCode })
+    io.to(roomChannel(created.id)).emit('room.joined', { roomId: created.id, userId: user.id, slot: 1 })
+    io.to(roomChannel(created.id)).emit('room.ready', { roomId: created.id })
+
+
+    return res.status(201).json({
+      roomId: created.id,
+      inviteCode: created.inviteCode,
+      msg: 'ROOM_CREATED'
+    })
   } catch (e: any) {
-    res.status(401).json({ error: e.message || 'UNAUTHORIZED' })
+    return res.status(401).json({ error: e.message || 'UNAUTHORIZED' })
   }
 })
-
-/** --- join room by invite code --- */
-app.post('/v1/rooms/join', async (req, res) => {
-  try {
-    const user = await requireAuth(req.headers.authorization)
-    const { inviteCode } = z.object({ inviteCode: z.string().min(4) }).parse(req.body)
-    const room = await prisma.room.findUnique({ where: { inviteCode } })
-    if (!room) return res.status(404).json({ error: 'ROOM_NOT_FOUND' })
-    if (['active', 'finished', 'abandoned'].includes(room.state)) return res.status(409).json({ error: 'ROOM_CLOSED' })
-
-    const players = await prisma.roomPlayer.findMany({ where: { roomId: room.id } })
-    if (players.length >= 2) return res.status(409).json({ error: 'ROOM_FULL' })
-
-    const slot = players.find((p: { slot: number; }) => p.slot === 1) ? 2 : 1
-    await prisma.roomPlayer.create({ data: { roomId: room.id, userId: user.id, slot, isReady: true } }) // Set ready immediately
-
-    // Auto-ready when 2 players join
-    const cnt = (await prisma.roomPlayer.count({ where: { roomId: room.id } }))
-    if (cnt === 2 && room.state === 'waiting') {
-      await prisma.room.update({ where: { id: room.id }, data: { state: 'ready' } })
-      io.to(roomChannel(room.id)).emit('room.ready', { roomId: room.id })
-    }
-
-    io.to(roomChannel(room.id)).emit('room.joined', { roomId: room.id, userId: user.id, slot })
-    res.json({ roomId: room.id, slot })
-  } catch (e: any) {
-    res.status(400).json({ error: e.message })
-  }
-})
-
 
 /** --- start battle --- */
 app.post('/v1/rooms/:roomId/start', async (req, res) => {
@@ -133,7 +154,7 @@ app.post('/v1/rooms/:roomId/start', async (req, res) => {
     if (!room) return res.status(404).json({ error: 'ROOM_NOT_FOUND' })
     const players = await prisma.roomPlayer.findMany({ where: { roomId } })
     if (players.length !== 2) return res.status(400).json({ error: 'ROOM_NOT_READY' })
-    if (!players.every((p: { isReady: boolean; }) => p.isReady)) return res.status(400).json({ error: 'ROOM_NOT_READY' })
+    // if (!players.every((p: { isReady: boolean; }) => p.isReady)) return res.status(400).json({ error: 'ROOM_NOT_READY' })
     if (room.state === 'active') return res.status(409).json({ error: 'ALREADY_STARTED' })
 
     const p1 = players.find((p: { slot: number; }) => p.slot === 1)!
@@ -143,30 +164,30 @@ app.post('/v1/rooms/:roomId/start', async (req, res) => {
     })
     await prisma.room.update({ where: { id: roomId }, data: { state: 'active', startedAt: new Date() } })
 
-    io.to(roomChannel(roomId)).emit('battle.started', { battleId: battle.id, bestOf: room.bestOf })
+    io.to(roomChannel(roomId)).emit('battle.started', { battleId: battle.id })
 
     // run rounds sequentially (simple MVP)
     let p1Score = 0, p2Score = 0
-    const toWin = ceilHalf(room.bestOf)
-    for (let roundNo = 1; roundNo <= room.bestOf; roundNo++) {
-      const seed = `${battle.id}:${roundNo}:${Date.now()}`
-      const result = runRound(seed, p1.userId, p2.userId)
+    // const toWin = ceilHalf(room.bestOf)
+    // for (let roundNo = 1; roundNo <= room.bestOf; roundNo++) {
+    //   const seed = `${battle.id}:${roundNo}:${Date.now()}`
+    //   const result = runRound(seed, p1.userId, p2.userId)
 
-      await prisma.round.create({
-        data: {
-          battleId: battle.id,
-          roundNo,
-          winnerUserId: result.winnerUserId,
-          p1Outcome: result.p1,
-          p2Outcome: result.p2,
-        }
-      })
+    //   await prisma.round.create({
+    //     data: {
+    //       battleId: battle.id,
+    //       roundNo,
+    //       winnerUserId: result.winnerUserId,
+    //       p1Outcome: result.p1,
+    //       p2Outcome: result.p2,
+    //     }
+    //   })
 
-      if (result.winnerUserId === p1.userId) p1Score++; else p2Score++;
-      io.to(roomChannel(roomId)).emit('round.finished', { round: roundNo, score: { p1: p1Score, p2: p2Score }, winnerUserId: result.winnerUserId })
+    //   if (result.winnerUserId === p1.userId) p1Score++; else p2Score++;
+    //   io.to(roomChannel(roomId)).emit('round.finished', { round: roundNo, score: { p1: p1Score, p2: p2Score }, winnerUserId: result.winnerUserId })
 
-      if (p1Score === toWin || p2Score === toWin) break
-    }
+    //   if (p1Score === toWin || p2Score === toWin) break
+    // }
 
     const winnerUserId = p1Score > p2Score ? p1.userId : p2.userId
     await prisma.battle.update({
