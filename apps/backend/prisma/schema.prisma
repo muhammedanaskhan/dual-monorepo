@@ -10,16 +10,23 @@ datasource db {
 
 model User {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  handle    String   @unique
   createdAt DateTime @default(now())
-
-  // denormalized stats for speed
+  privyId   String   @unique
+  cardIds   String[]
   wins   Int     @default(0)
   losses Int     @default(0)
   streak Int     @default(0)
   elo    Int     @default(1200)
 
   @@index([elo(sort: Desc)])
+}
+
+model Card {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  imageUrl  String
+  points    Int
+  createdAt DateTime @default(now())
 }
 
 model Room {

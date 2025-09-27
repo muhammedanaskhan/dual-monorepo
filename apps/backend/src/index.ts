@@ -5,8 +5,8 @@ import { createServer } from 'http'
 import { Server as IOServer } from 'socket.io'
 import { z } from 'zod'
 import { prisma } from '../prisma/index'
-import { createAnonymousUser, requireAuth } from './auth'
 import { runRound } from './battleEngine'
+import { requireAuth } from './utils/verification'
 
 const app = express()
 app.use(cors())
@@ -24,28 +24,61 @@ io.on('connection', (socket) => {
   socket.on('room.join', ({ roomId }) => {
     socket.join(roomChannel(roomId))
   })
-  socket.on('disconnect', () => {})
+  socket.on('disconnect', () => {
+//todo: we need to handle the case when inside a match - someone just closes the connection
+  })
 })
 
 /** --- auth --- */
 app.post('/v1/auth/anonymous', async (_req, res) => {
-  const out = await createAnonymousUser()
-  res.json(out)
+  const user = await requireAuth(_req.headers.authorization);
+
+  if (!user.id) {
+    await prisma.user.create({ data: { privyId: user.id } })
+    res.json({msg: "User created"})
+    return
+  }
+  res.json({msg: "User already exists"})
+})
+
+
+app.post('/v1/auth/cards', async (req, res) => {
+  const user = await requireAuth(req.headers.authorization)
+  const cards = await prisma.user.findUnique({ where: { privyId: user.id } })
+
+  if (cards?.cardIds.length === 0) {
+    //todo: select any random 5 cards from the 20 cards which we have [zaid].
+    const cards = await prisma.card.findMany({ take: 5 })
+    res.json(cards)
+    return
+  }
+
+  const promiseCardsArray = cards?.cardIds.map(async (cardId: string) => {
+    const promise = prisma.card.findUnique({ where: { id: cardId } })
+    return promise
+  });
+
+  const cardsArray = await Promise.all(promiseCardsArray || [])
+  res.json(cardsArray)
 })
 
 /** --- create room --- */
+//todo: this should handle the logic to find the rooms, and then it should automatically find the room and get the user over there
 app.post('/v1/rooms', async (req, res) => {
   try {
-    const user = requireAuth(req.headers.authorization)
-    const body = z.object({ bestOf: z.number().int().positive().default(3) }).parse(req.body)
-    if (body.bestOf % 2 === 0) return res.status(400).json({ error: 'bestOf must be odd' }) //todo: lets change it to be unlimited and it should be determined by the engine, that - how many rounds should be played - it should never determine this actually.
+
+
+    // todo: 
+
+    // 1. Check if this is 
+    const user = await requireAuth(req.headers.authorization)
+//todo: lets change it to be unlimited and it should be determined by the engine, that - how many rounds should be played - it should never determine this actually.
 
     const room = await prisma.room.create({
       data: {
         inviteCode: shortCode(6),
         hostUserId: user.id,
         state: 'waiting',
-        bestOf: body.bestOf, //todo: remove
       },
     })
 
@@ -53,7 +86,7 @@ app.post('/v1/rooms', async (req, res) => {
       data: { roomId: room.id, userId: user.id, slot: 1, isReady: false },
     })
 
-    io.to(roomChannel(room.id)).emit('room.created', { roomId: room.id, inviteCode: room.inviteCode, bestOf: room.bestOf }) //todo: remove bestOf
+    io.to(roomChannel(room.id)).emit('room.created', { roomId: room.id, inviteCode: room.inviteCode }) 
     res.status(201).json({ roomId: room.id, inviteCode: room.inviteCode, bestOf: room.bestOf })
   } catch (e: any) {
     res.status(401).json({ error: e.message || 'UNAUTHORIZED' })
@@ -63,7 +96,7 @@ app.post('/v1/rooms', async (req, res) => {
 /** --- join room by invite code --- */
 app.post('/v1/rooms/join', async (req, res) => {
   try {
-    const user = requireAuth(req.headers.authorization)
+    const user = await requireAuth(req.headers.authorization)
     const { inviteCode } = z.object({ inviteCode: z.string().min(4) }).parse(req.body)
     const room = await prisma.room.findUnique({ where: { inviteCode } })
     if (!room) return res.status(404).json({ error: 'ROOM_NOT_FOUND' })
@@ -73,9 +106,9 @@ app.post('/v1/rooms/join', async (req, res) => {
     if (players.length >= 2) return res.status(409).json({ error: 'ROOM_FULL' })
 
     const slot = players.find((p: { slot: number; }) => p.slot === 1) ? 2 : 1
-    await prisma.roomPlayer.create({ data: { roomId: room.id, userId: user.id, slot, isReady: false } })
+    await prisma.roomPlayer.create({ data: { roomId: room.id, userId: user.id, slot, isReady: true } }) // Set ready immediately
 
-    // update to ready state if 2 present
+    // Auto-ready when 2 players join
     const cnt = (await prisma.roomPlayer.count({ where: { roomId: room.id } }))
     if (cnt === 2 && room.state === 'waiting') {
       await prisma.room.update({ where: { id: room.id }, data: { state: 'ready' } })
@@ -89,26 +122,6 @@ app.post('/v1/rooms/join', async (req, res) => {
   }
 })
 
-/** --- mark ready --- */
-app.post('/v1/rooms/:roomId/ready', async (req, res) => {
-  try {
-    const user = requireAuth(req.headers.authorization)
-    const { roomId } = req.params
-    const rp = await prisma.roomPlayer.findFirst({ where: { roomId, userId: user.id } })
-    if (!rp) return res.status(403).json({ error: 'NOT_IN_ROOM' })
-    await prisma.roomPlayer.update({ where: { id: rp.id }, data: { isReady: true } })
-
-    const all = await prisma.roomPlayer.findMany({ where: { roomId } })
-    const bothReady = all.length === 2 && all.every((p: { isReady: boolean; }) => p.isReady)
-    if (bothReady) {
-      await prisma.room.update({ where: { id: roomId }, data: { state: 'ready' } })
-      io.to(roomChannel(roomId)).emit('room.ready', { roomId })
-    }
-    res.json({ ok: true, bothReady })
-  } catch (e: any) {
-    res.status(400).json({ error: e.message })
-  }
-})
 
 /** --- start battle --- */
 app.post('/v1/rooms/:roomId/start', async (req, res) => {
@@ -162,7 +175,7 @@ app.post('/v1/rooms/:roomId/start', async (req, res) => {
     await prisma.room.update({ where: { id: roomId }, data: { state: 'finished', endedAt: new Date() } })
 
     // update user stats + naive ELO delta
-    const delta = 15
+    const delta = 10;
     if (winnerUserId === p1.userId) {
       await prisma.user.update({ where: { id: p1.userId }, data: { wins: { increment: 1 }, streak: { increment: 1 }, elo: { increment: delta } } })
       await prisma.user.update({ where: { id: p2.userId }, data: { losses: { increment: 1 }, streak: 0, elo: { decrement: delta } } as any })
@@ -181,7 +194,7 @@ app.post('/v1/rooms/:roomId/start', async (req, res) => {
 /** --- get leaderboard (top N by ELO) --- */
 app.get('/v1/leaderboard', async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 200)
-  const top = await prisma.user.findMany({ orderBy: { elo: 'desc' }, take: limit, select: { id: true, handle: true, elo: true, wins: true, losses: true } })
+  const top = await prisma.user.findMany({ orderBy: { elo: 'desc' }, take: limit, select: { id: true, elo: true, wins: true, losses: true } })
   res.json({ entries: top })
 })
 
