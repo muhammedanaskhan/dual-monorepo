@@ -1,0 +1,5 @@
+/apps/backend/node_modules
+/apps/frontend/node_modules
+/apps/backend/dist
+/apps/frontend/.next
+/node_modules

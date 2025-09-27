@@ -1,0 +1,13 @@
+{
+  "name": "dual",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n frontend,backend -c green,blue \"npm run -w @dual/frontend dev\" \"npm run -w @dual/backend dev\"",
+    "build": "npm run -w @dual/frontend build && npm run -w @dual/backend build",
+    "start": "concurrently -n frontend,backend -c green,blue \"npm run -w @dual/frontend start\" \"npm run -w @dual/backend start\""
+  }
+}
