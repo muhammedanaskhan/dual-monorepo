@@ -1,8 +1,7 @@
 {
-  "name": "eth-india-battle-game",
-  "version": "1.0.0",
-  "description": "Real-time battle game for ETH India",
-  "main": "dist/index.js",
+  "name": "@dual/backend",
+  "version": "0.0.0",
+  "private": true,
   "scripts": {
     "build": "tsc",
     "start": "node dist/src/index.js",
@@ -21,13 +20,20 @@
     "prisma": "^6.16.2",
     "socket.io": "^4.8.1",
     "zod": "^4.1.11"
+    "dev": "ts-node-dev --respawn --transpileOnly src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "prisma": "prisma generate"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
-    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.5.2",
-    "nodemon": "^3.1.10",
-    "ts-node": "^10.9.2",
+    "prisma": "^6.16.2",
+    "ts-node-dev": "^2.0.0",
     "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.2"
   }
 }
