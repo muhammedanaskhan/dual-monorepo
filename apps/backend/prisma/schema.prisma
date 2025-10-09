@@ -32,9 +32,8 @@ model Card {
 model Room {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   inviteCode  String   
-  hostUserId  String   @db.ObjectId
+  hostUserId  String 
   state       RoomState @default(waiting)
-  bestOf      Int      @default(3)
   createdAt   DateTime @default(now())
   startedAt   DateTime?
   endedAt     DateTime?
@@ -54,9 +53,8 @@ enum RoomState {
 model RoomPlayer {
   id       String   @id @default(auto()) @map("_id") @db.ObjectId
   roomId   String   @db.ObjectId
-  userId   String   @db.ObjectId
+  userId   String   
   slot     Int      // 1 or 2
-  isReady  Boolean  @default(false)
   joinedAt DateTime @default(now())
 
   @@index([roomId])
@@ -66,11 +64,11 @@ model RoomPlayer {
 model Battle {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   roomId        String   @db.ObjectId @unique
-  p1UserId      String   @db.ObjectId
-  p2UserId      String   @db.ObjectId
+  p1UserId      String   
+  p2UserId      String   
   p1Score       Int      @default(0)
   p2Score       Int      @default(0)
-  winnerUserId  String?  @db.ObjectId
+  winnerUserId  String?  
   status        BattleStatus @default(pending)
   createdAt     DateTime @default(now())
 
@@ -87,7 +85,7 @@ model Round {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
   battleId     String   @db.ObjectId
   roundNo      Int
-  winnerUserId String   @db.ObjectId
+  winnerUserId String
   p1Outcome    Json
   p2Outcome    Json
   startedAt    DateTime @default(now())
